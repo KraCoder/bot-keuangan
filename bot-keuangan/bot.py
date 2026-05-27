@@ -3,9 +3,9 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from supabase import create_client
 
-SUPABASE_URL = os.environ["https://smgwjfywhslvdxheebui.supabase.co"]
-SUPABASE_KEY = os.environ["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNtZ3dqZnl3aHNsdmR4aGVlYnVpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4NzkxMTYsImV4cCI6MjA5NTQ1NTExNn0.gIcS9hknVCyVeyB1uvtkcvSseKGlDfWaBWBBmJuZPDI"]
-BOT_TOKEN = os.environ["8736432376:AAFP1PSfnvZ_4N-XAUVhYw1wQUsof4shDKQ"]
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_KEY = os.environ["SUPABASE_KEY"]
+BOT_TOKEN = os.environ["BOT_TOKEN"]
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
