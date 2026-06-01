@@ -9,7 +9,6 @@ from telegram.ext import (
     filters, ContextTypes
 )
 
-# ─── Konfigurasi ───────────────────────────────────────────────
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 BOT_TOKEN    = os.environ["BOT_TOKEN"]
@@ -21,14 +20,14 @@ HEADERS = {
     "Prefer": "return=representation"
 }
 
-# ─── Web server kecil agar Render tidak sleep ──────────────────
+# ─── Web server agar tidak sleep ───────────────────────────────
 class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Bot keuangan aktif!")
     def log_message(self, format, *args):
-        pass  # sembunyikan log request
+        pass
 
 def jalankan_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -39,55 +38,89 @@ def jalankan_web_server():
 # ─── Helper Supabase ───────────────────────────────────────────
 def sb_get(table, params=None):
     with httpx.Client() as c:
-        r = c.get(f"{SUPABASE_URL}/rest/v1/{table}", headers=HEADERS, params=params)
+        r = c.get(f"{SUPABASE_URL}/rest/v1/{table}",
+                  headers=HEADERS, params=params)
     return r.json()
 
 def sb_post(table, data):
     with httpx.Client() as c:
-        r = c.post(f"{SUPABASE_URL}/rest/v1/{table}", headers=HEADERS, json=data)
+        r = c.post(f"{SUPABASE_URL}/rest/v1/{table}",
+                   headers=HEADERS, json=data)
     return r.json()
 
 def sb_patch(table, match, data):
     params = {k: f"eq.{v}" for k, v in match.items()}
     with httpx.Client() as c:
-        r = c.patch(f"{SUPABASE_URL}/rest/v1/{table}", headers=HEADERS, params=params, json=data)
+        r = c.patch(f"{SUPABASE_URL}/rest/v1/{table}",
+                    headers=HEADERS, params=params, json=data)
     return r.status_code
 
-def get_dompets():
-    rows = sb_get("dompets", {"select": "id,nama,saldo"})
+# ─── Kenali user berdasarkan Telegram ID ───────────────────────
+def get_user_id(telegram_id: int) -> str | None:
+    """Kembalikan user_id ('suami'/'istri') atau None jika tidak dikenal."""
+    rows = sb_get("telegram_users", {
+        "select": "user_id,nama",
+        "telegram_id": f"eq.{telegram_id}"
+    })
+    if isinstance(rows, list) and rows:
+        return rows[0]["user_id"], rows[0]["nama"]
+    return None, None
+
+def get_dompets(user_id: str) -> dict:
+    """Ambil dompet milik user tertentu."""
+    rows = sb_get("dompets", {
+        "select": "id,nama,saldo",
+        "user_id": f"eq.{user_id}"
+    })
     if not isinstance(rows, list):
         return {}
     return {row["nama"].lower(): row for row in rows}
 
-# ─── Command handlers ──────────────────────────────────────────
-async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    dompets = get_dompets()
-    daftar = "\n".join([f"  • {d['nama']}" for d in dompets.values()])
-    pesan = (
-        "💰 *Bot Keuangan Keluarga*\n\n"
-        "*Format input transaksi:*\n"
-        "`keluar [jumlah] [keterangan] [kategori] [dompet]`\n"
-        "`masuk [jumlah] [keterangan] [dompet]`\n\n"
-        "*Contoh:*\n"
-        "`keluar 50000 bensin transport gopay`\n"
-        "`masuk 5000000 gaji bca suami`\n\n"
-        "*Kategori tersedia:*\n"
-        "  makan · transport · utilitas · hiburan\n"
-        "  jajan · sewa · kesehatan · lainnya\n\n"
-        f"*Dompet tersedia:*\n{daftar}\n\n"
-        "*Perintah lain:*\n"
-        "/saldo — lihat semua saldo\n"
-        "/bulan — ringkasan bulan ini\n"
-        "/bantuan — panduan lengkap"
-    )
-    await update.message.reply_text(pesan, parse_mode="Markdown")
+# ─── Guard: cek user terdaftar ────────────────────────────────
+async def cek_akses(update: Update) -> tuple:
+    """
+    Cek apakah pengirim terdaftar.
+    Return (user_id, nama) atau (None, None) jika tidak dikenal.
+    """
+    telegram_id = update.message.from_user.id
+    user_id, nama = get_user_id(telegram_id)
+    if not user_id:
+        await update.message.reply_text(
+            "⛔ Maaf, kamu tidak terdaftar.\n"
+            "Hubungi admin untuk didaftarkan.",
+        )
+    return user_id, nama
 
-async def cmd_saldo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    dompets = get_dompets()
-    if not dompets:
-        await update.message.reply_text("Belum ada data dompet.")
+# ─── Command: /start ──────────────────────────────────────────
+async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user_id, nama = await cek_akses(update)
+    if not user_id:
         return
-    pesan = "💳 *Saldo Semua Dompet:*\n\n"
+    dompets = get_dompets(user_id)
+    daftar = "\n".join([f"  • {d['nama']}" for d in dompets.values()])
+    await update.message.reply_text(
+        f"💰 *Bot Keuangan — {nama}*\n\n"
+        f"*Format input:*\n"
+        f"`keluar [jumlah] [keterangan] [kategori] [dompet]`\n"
+        f"`masuk [jumlah] [keterangan] [dompet]`\n\n"
+        f"*Contoh:*\n"
+        f"`keluar 50000 bensin transport gopay`\n"
+        f"`masuk 5000000 gaji bca`\n\n"
+        f"*Dompetmu:*\n{daftar if daftar else '  (belum ada dompet)'}\n\n"
+        f"*Perintah:* /saldo /bulan /bantuan",
+        parse_mode="Markdown"
+    )
+
+# ─── Command: /saldo ──────────────────────────────────────────
+async def cmd_saldo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user_id, nama = await cek_akses(update)
+    if not user_id:
+        return
+    dompets = get_dompets(user_id)
+    if not dompets:
+        await update.message.reply_text("Belum ada dompet terdaftar.")
+        return
+    pesan = f"💳 *Saldo {nama}:*\n\n"
     total = 0
     for d in dompets.values():
         saldo = int(d["saldo"])
@@ -96,86 +129,96 @@ async def cmd_saldo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     pesan += f"\n*Total: Rp {total:,}*"
     await update.message.reply_text(pesan, parse_mode="Markdown")
 
+# ─── Command: /bulan ──────────────────────────────────────────
 async def cmd_bulan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user_id, nama = await cek_akses(update)
+    if not user_id:
+        return
     hari_ini = date.today()
-    awal_bulan = hari_ini.replace(day=1).isoformat()
+    awal = hari_ini.replace(day=1).isoformat()
     rows = sb_get("transaksi", {
         "select": "jumlah,jenis,kategori",
-        "tanggal": f"gte.{awal_bulan}"
+        "tanggal": f"gte.{awal}",
+        "user_id": f"eq.{user_id}"
     })
     if not isinstance(rows, list):
         await update.message.reply_text("Gagal mengambil data.")
         return
-    total_keluar, total_masuk, per_kategori = 0, 0, {}
+    total_keluar, total_masuk, per_kat = 0, 0, {}
     for r in rows:
-        jumlah = float(r.get("jumlah", 0))
+        j = float(r.get("jumlah", 0))
         if r.get("jenis") == "keluar":
-            total_keluar += jumlah
-            kat = r.get("kategori", "lainnya")
-            per_kategori[kat] = per_kategori.get(kat, 0) + jumlah
+            total_keluar += j
+            k = r.get("kategori", "lainnya")
+            per_kat[k] = per_kat.get(k, 0) + j
         else:
-            total_masuk += jumlah
-    bulan_nama = hari_ini.strftime("%B %Y")
-    pesan = f"📊 *Ringkasan {bulan_nama}*\n\n"
-    pesan += f"✅ Pemasukan : Rp {int(total_masuk):,}\n"
+            total_masuk += j
+    pesan = f"📊 *Ringkasan {hari_ini.strftime('%B %Y')} — {nama}*\n\n"
+    pesan += f"✅ Pemasukan  : Rp {int(total_masuk):,}\n"
     pesan += f"❌ Pengeluaran: Rp {int(total_keluar):,}\n"
-    pesan += f"💰 Selisih   : Rp {int(total_masuk - total_keluar):,}\n\n"
-    if per_kategori:
-        pesan += "*Pengeluaran per Kategori:*\n"
-        for kat, jml in sorted(per_kategori.items(), key=lambda x: -x[1]):
-            pesan += f"  • {kat}: Rp {int(jml):,}\n"
+    pesan += f"💰 Selisih    : Rp {int(total_masuk - total_keluar):,}\n\n"
+    if per_kat:
+        pesan += "*Per Kategori:*\n"
+        for k, v in sorted(per_kat.items(), key=lambda x: -x[1]):
+            pesan += f"  • {k}: Rp {int(v):,}\n"
     await update.message.reply_text(pesan, parse_mode="Markdown")
 
+# ─── Command: /bantuan ────────────────────────────────────────
 async def cmd_bantuan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    pesan = (
-        "📖 *Panduan Lengkap Bot Keuangan*\n\n"
-        "*1. Input pengeluaran:*\n"
-        "`keluar 85000 sayur makan kas tunai`\n\n"
-        "*2. Input pemasukan:*\n"
-        "`masuk 5000000 gaji bca suami`\n\n"
-        "*3. Format angka:*\n"
-        "  • Tulis tanpa titik/koma\n"
-        "  • 50000 bukan 50.000\n\n"
-        "*4. Nama dompet:*\n"
-        "  • Boleh sebagian, contoh: `gopay` saja\n"
-        "  • Tidak perlu huruf besar\n\n"
-        "*5. Kategori:*\n"
-        "  makan · transport · utilitas\n"
-        "  hiburan · jajan · sewa · kesehatan · lainnya\n\n"
-        "*6. Cek saldo:* /saldo\n"
-        "*7. Ringkasan bulan:* /bulan"
+    await update.message.reply_text(
+        "📖 *Panduan Bot Keuangan*\n\n"
+        "*Pengeluaran:*\n`keluar 85000 sayur makan kas tunai`\n\n"
+        "*Pemasukan:*\n`masuk 5000000 gaji bca`\n\n"
+        "*Angka:* tanpa titik/koma (50000 bukan 50.000)\n"
+        "*Dompet:* boleh sebagian nama, misal `gopay`\n\n"
+        "*Kategori:*\nmakan · transport · utilitas · hiburan\n"
+        "jajan · sewa · kesehatan · lainnya\n\n"
+        "/saldo — cek saldo\n"
+        "/bulan — ringkasan bulan ini",
+        parse_mode="Markdown"
     )
-    await update.message.reply_text(pesan, parse_mode="Markdown")
 
+# ─── Pesan biasa: input transaksi ─────────────────────────────
 async def terima_pesan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user_id, nama = await cek_akses(update)
+    if not user_id:
+        return
+
     teks = update.message.text.strip().lower().split()
     if len(teks) < 2:
         await update.message.reply_text(
-            "Format tidak dikenali.\nContoh: `keluar 50000 bensin transport gopay`",
+            "Format tidak dikenali.\n"
+            "Contoh: `keluar 50000 bensin transport gopay`",
             parse_mode="Markdown"
         )
         return
+
     jenis = teks[0]
     if jenis not in ["keluar", "masuk"]:
         await update.message.reply_text(
-            "Mulai pesan dengan *keluar* atau *masuk*.",
+            "Mulai dengan *keluar* atau *masuk*.",
             parse_mode="Markdown"
         )
         return
+
     try:
         jumlah = float(teks[1].replace(",", "").replace(".", ""))
     except ValueError:
-        await update.message.reply_text("Jumlah tidak valid. Tulis angka saja, contoh: `50000`", parse_mode="Markdown")
+        await update.message.reply_text(
+            "Jumlah tidak valid. Contoh: `50000`",
+            parse_mode="Markdown"
+        )
         return
 
-    keterangan = teks[2] if len(teks) > 2 else "tidak ada keterangan"
-    kategori   = teks[3] if len(teks) > 3 else "lainnya"
+    keterangan  = teks[2] if len(teks) > 2 else "tidak ada keterangan"
+    kategori    = teks[3] if len(teks) > 3 else "lainnya"
     dompet_cari = " ".join(teks[4:]) if len(teks) > 4 else ""
 
-    dompets = get_dompets()
+    # Cari dompet milik user ini
+    dompets = get_dompets(user_id)
     dompet_id, dompet_nama, saldo_lama = None, "Kas Tunai", 0
-    for nama, data in dompets.items():
-        if dompet_cari in nama or nama in dompet_cari or dompet_cari == "":
+    for nama_d, data in dompets.items():
+        if dompet_cari in nama_d or nama_d in dompet_cari or dompet_cari == "":
             dompet_id   = data["id"]
             dompet_nama = data["nama"]
             saldo_lama  = float(data["saldo"])
@@ -184,17 +227,20 @@ async def terima_pesan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         first = next(iter(dompets.values()))
         dompet_id, dompet_nama, saldo_lama = first["id"], first["nama"], float(first["saldo"])
 
+    # Simpan transaksi dengan user_id
     sb_post("transaksi", {
-        "tanggal": date.today().isoformat(),
-        "keterangan": keterangan,
-        "jumlah": jumlah,
-        "jenis": jenis,
-        "kategori": kategori,
-        "dompet_id": dompet_id,
-        "sumber": "bot",
+        "tanggal"     : date.today().isoformat(),
+        "keterangan"  : keterangan,
+        "jumlah"      : jumlah,
+        "jenis"       : jenis,
+        "kategori"    : kategori,
+        "dompet_id"   : dompet_id,
+        "user_id"     : user_id,
+        "sumber"      : "bot",
         "diverifikasi": False
     })
 
+    # Update saldo dompet
     saldo_baru = saldo_lama - jumlah if jenis == "keluar" else saldo_lama + jumlah
     sb_patch("dompets", {"id": dompet_id}, {"saldo": saldo_baru})
 
@@ -204,19 +250,17 @@ async def terima_pesan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{emoji} *{'Pengeluaran' if jenis=='keluar' else 'Pemasukan'} tersimpan!*\n\n"
         f"📝 {keterangan.capitalize()}\n"
         f"💵 {tanda}Rp {int(jumlah):,}\n"
-        f"🏷️ Kategori : {kategori}\n"
-        f"👛 Dompet   : {dompet_nama}\n"
+        f"🏷️ Kategori  : {kategori}\n"
+        f"👛 Dompet    : {dompet_nama}\n"
         f"💳 Saldo baru: Rp {int(saldo_baru):,}\n\n"
-        f"_Data menunggu verifikasi di dashboard_",
+        f"_Data masuk ke dashboard {nama}_",
         parse_mode="Markdown"
     )
 
-# ─── Main ──────────────────────────────────────────────────────
+# ─── Main ─────────────────────────────────────────────────────
 if __name__ == "__main__":
-    # Jalankan web server di thread terpisah
     t = threading.Thread(target=jalankan_web_server, daemon=True)
     t.start()
-
     print("Bot keuangan berjalan...")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start",   cmd_start))
