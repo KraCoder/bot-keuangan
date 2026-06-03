@@ -77,17 +77,20 @@ def get_dompets(user_id: str) -> dict:
     return {row["nama"].lower(): row for row in rows}
 
 # ─── Guard: cek user terdaftar ────────────────────────────────
-async def cek_akses(update: Update) -> tuple:
-    """
-    Cek apakah pengirim terdaftar.
-    Return (user_id, nama) atau (None, None) jika tidak dikenal.
-    """
+async def cek_akses(update: Update):
     telegram_id = update.message.from_user.id
-    user_id, nama = get_user_id(telegram_id)
+    username    = update.message.from_user.username or '-'
+    print(f"[AKSES] telegram_id={telegram_id} username=@{username}")
+    
+    user_id, nama = get_user_info(telegram_id)
+    print(f"[AKSES] hasil lookup → user_id={user_id}, nama={nama}")
+    
     if not user_id:
         await update.message.reply_text(
-            "⛔ Maaf, kamu tidak terdaftar.\n"
-            "Hubungi admin untuk didaftarkan.",
+            f"⛔ Kamu belum terdaftar.\n"
+            f"ID Telegram kamu: `{telegram_id}`\n"
+            f"Kirimkan ID ini ke admin untuk didaftarkan.",
+            parse_mode="Markdown"
         )
     return user_id, nama
 
