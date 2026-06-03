@@ -1,3 +1,7 @@
+import sys
+print("=== BOT STARTING ===", flush=True)
+sys.stdout.flush()
+
 import os
 import httpx
 import threading
@@ -20,7 +24,7 @@ HEADERS = {
     "Prefer": "return=representation"
 }
 
-# ─── Web server agar tidak sleep ───────────────────────────────
+# ── Web server agar tidak sleep ────────────────────────────────
 class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -32,37 +36,37 @@ class PingHandler(BaseHTTPRequestHandler):
 def jalankan_web_server():
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), PingHandler)
-    print(f"Web server berjalan di port {port}")
+    print(f"Web server berjalan di port {port}", flush=True)
     server.serve_forever()
 
-# ─── Helper Supabase ───────────────────────────────────────────
+# ── Helper Supabase ────────────────────────────────────────────
 def sb_get(table, params=None):
-    with httpx.Client() as c:
+    with httpx.Client(timeout=10) as c:
         r = c.get(f"{SUPABASE_URL}/rest/v1/{table}",
                   headers=HEADERS, params=params)
     return r.json()
 
 def sb_post(table, data):
-    with httpx.Client() as c:
+    with httpx.Client(timeout=10) as c:
         r = c.post(f"{SUPABASE_URL}/rest/v1/{table}",
                    headers=HEADERS, json=data)
     return r.json()
 
 def sb_patch(table, match, data):
     params = {k: f"eq.{v}" for k, v in match.items()}
-    with httpx.Client() as c:
+    with httpx.Client(timeout=10) as c:
         r = c.patch(f"{SUPABASE_URL}/rest/v1/{table}",
                     headers=HEADERS, params=params, json=data)
     return r.status_code
 
-# ─── Kenali user berdasarkan Telegram ID ───────────────────────
-def get_user_id(telegram_id: int) -> str | None:
-    """Kembalikan user_id ('suami'/'istri') atau None jika tidak dikenal."""
+# ── Kenali user dari Telegram ID ──────────────────────────────
+def get_user_info(telegram_id: int):
+    """Kembalikan (user_id, nama) berdasarkan Telegram ID."""
     rows = sb_get("telegram_users", {
         "select": "user_id,nama",
         "telegram_id": f"eq.{telegram_id}"
     })
-    if isinstance(rows, list) and rows:
+    if isinstance(rows, list) and len(rows) > 0:
         return rows[0]["user_id"], rows[0]["nama"]
     return None, None
 
@@ -76,15 +80,15 @@ def get_dompets(user_id: str) -> dict:
         return {}
     return {row["nama"].lower(): row for row in rows}
 
-# ─── Guard: cek user terdaftar ────────────────────────────────
+# ── Guard akses ────────────────────────────────────────────────
 async def cek_akses(update: Update):
     telegram_id = update.message.from_user.id
     username    = update.message.from_user.username or '-'
-    print(f"[AKSES] telegram_id={telegram_id} username=@{username}")
-    
+    print(f"[AKSES] telegram_id={telegram_id} username=@{username}", flush=True)
+
     user_id, nama = get_user_info(telegram_id)
-    print(f"[AKSES] hasil lookup → user_id={user_id}, nama={nama}")
-    
+    print(f"[AKSES] hasil → user_id={user_id}, nama={nama}", flush=True)
+
     if not user_id:
         await update.message.reply_text(
             f"⛔ Kamu belum terdaftar.\n"
@@ -94,7 +98,7 @@ async def cek_akses(update: Update):
         )
     return user_id, nama
 
-# ─── Command: /start ──────────────────────────────────────────
+# ── /start ─────────────────────────────────────────────────────
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_id, nama = await cek_akses(update)
     if not user_id:
@@ -114,7 +118,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-# ─── Command: /saldo ──────────────────────────────────────────
+# ── /saldo ─────────────────────────────────────────────────────
 async def cmd_saldo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_id, nama = await cek_akses(update)
     if not user_id:
@@ -132,16 +136,16 @@ async def cmd_saldo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     pesan += f"\n*Total: Rp {total:,}*"
     await update.message.reply_text(pesan, parse_mode="Markdown")
 
-# ─── Command: /bulan ──────────────────────────────────────────
+# ── /bulan ─────────────────────────────────────────────────────
 async def cmd_bulan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_id, nama = await cek_akses(update)
     if not user_id:
         return
-    hari_ini = date.today()
-    awal = hari_ini.replace(day=1).isoformat()
+    hari_ini   = date.today()
+    awal_bulan = hari_ini.replace(day=1).isoformat()
     rows = sb_get("transaksi", {
         "select": "jumlah,jenis,kategori",
-        "tanggal": f"gte.{awal}",
+        "tanggal": f"gte.{awal_bulan}",
         "user_id": f"eq.{user_id}"
     })
     if not isinstance(rows, list):
@@ -156,7 +160,7 @@ async def cmd_bulan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             per_kat[k] = per_kat.get(k, 0) + j
         else:
             total_masuk += j
-    pesan = f"📊 *Ringkasan {hari_ini.strftime('%B %Y')} — {nama}*\n\n"
+    pesan  = f"📊 *Ringkasan {hari_ini.strftime('%B %Y')} — {nama}*\n\n"
     pesan += f"✅ Pemasukan  : Rp {int(total_masuk):,}\n"
     pesan += f"❌ Pengeluaran: Rp {int(total_keluar):,}\n"
     pesan += f"💰 Selisih    : Rp {int(total_masuk - total_keluar):,}\n\n"
@@ -166,13 +170,13 @@ async def cmd_bulan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             pesan += f"  • {k}: Rp {int(v):,}\n"
     await update.message.reply_text(pesan, parse_mode="Markdown")
 
-# ─── Command: /bantuan ────────────────────────────────────────
+# ── /bantuan ───────────────────────────────────────────────────
 async def cmd_bantuan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📖 *Panduan Bot Keuangan*\n\n"
         "*Pengeluaran:*\n`keluar 85000 sayur makan kas tunai`\n\n"
         "*Pemasukan:*\n`masuk 5000000 gaji bca`\n\n"
-        "*Angka:* tanpa titik/koma (50000 bukan 50.000)\n"
+        "*Angka:* tulis tanpa titik/koma\n"
         "*Dompet:* boleh sebagian nama, misal `gopay`\n\n"
         "*Kategori:*\nmakan · transport · utilitas · hiburan\n"
         "jajan · sewa · kesehatan · lainnya\n\n"
@@ -181,25 +185,26 @@ async def cmd_bantuan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-# ─── Pesan biasa: input transaksi ─────────────────────────────
+# ── Terima pesan transaksi ─────────────────────────────────────
 async def terima_pesan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_id, nama = await cek_akses(update)
     if not user_id:
         return
 
-    teks = update.message.text.strip().lower().split()
-    if len(teks) < 2:
+    teks  = update.message.text.strip().lower().split()
+    jenis = teks[0] if teks else ""
+
+    if jenis not in ["keluar", "masuk"]:
         await update.message.reply_text(
-            "Format tidak dikenali.\n"
-            "Contoh: `keluar 50000 bensin transport gopay`",
+            "Mulai dengan *keluar* atau *masuk*.\n"
+            "Ketik /bantuan untuk panduan.",
             parse_mode="Markdown"
         )
         return
 
-    jenis = teks[0]
-    if jenis not in ["keluar", "masuk"]:
+    if len(teks) < 2:
         await update.message.reply_text(
-            "Mulai dengan *keluar* atau *masuk*.",
+            "Format kurang lengkap.\nContoh: `keluar 50000 bensin transport gopay`",
             parse_mode="Markdown"
         )
         return
@@ -208,7 +213,7 @@ async def terima_pesan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         jumlah = float(teks[1].replace(",", "").replace(".", ""))
     except ValueError:
         await update.message.reply_text(
-            "Jumlah tidak valid. Contoh: `50000`",
+            "Jumlah tidak valid. Tulis angka saja, contoh: `50000`",
             parse_mode="Markdown"
         )
         return
@@ -217,7 +222,7 @@ async def terima_pesan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     kategori    = teks[3] if len(teks) > 3 else "lainnya"
     dompet_cari = " ".join(teks[4:]) if len(teks) > 4 else ""
 
-    # Cari dompet milik user ini
+    # Cari dompet milik user ini saja
     dompets = get_dompets(user_id)
     dompet_id, dompet_nama, saldo_lama = None, "Kas Tunai", 0
     for nama_d, data in dompets.items():
@@ -227,8 +232,10 @@ async def terima_pesan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             saldo_lama  = float(data["saldo"])
             break
     if not dompet_id and dompets:
-        first = next(iter(dompets.values()))
-        dompet_id, dompet_nama, saldo_lama = first["id"], first["nama"], float(first["saldo"])
+        first       = next(iter(dompets.values()))
+        dompet_id   = first["id"]
+        dompet_nama = first["nama"]
+        saldo_lama  = float(first["saldo"])
 
     # Simpan transaksi dengan user_id
     sb_post("transaksi", {
@@ -243,7 +250,7 @@ async def terima_pesan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "diverifikasi": False
     })
 
-    # Update saldo dompet
+    # Update saldo
     saldo_baru = saldo_lama - jumlah if jenis == "keluar" else saldo_lama + jumlah
     sb_patch("dompets", {"id": dompet_id}, {"saldo": saldo_baru})
 
@@ -256,19 +263,19 @@ async def terima_pesan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"🏷️ Kategori  : {kategori}\n"
         f"👛 Dompet    : {dompet_nama}\n"
         f"💳 Saldo baru: Rp {int(saldo_baru):,}\n\n"
-        f"_Data masuk ke dashboard {nama}_",
+        f"_Masuk ke dashboard {nama}_",
         parse_mode="Markdown"
     )
 
-# ─── Main ─────────────────────────────────────────────────────
+# ── Main ───────────────────────────────────────────────────────
 if __name__ == "__main__":
     t = threading.Thread(target=jalankan_web_server, daemon=True)
     t.start()
-    print("Bot keuangan berjalan...")
+    print("Bot keuangan berjalan...", flush=True)
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start",   cmd_start))
     app.add_handler(CommandHandler("saldo",   cmd_saldo))
     app.add_handler(CommandHandler("bulan",   cmd_bulan))
     app.add_handler(CommandHandler("bantuan", cmd_bantuan))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, terima_pesan))
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
