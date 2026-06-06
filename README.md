@@ -32,7 +32,7 @@ Bot Telegram untuk mencatat dan mengelola transaksi keuangan pribadi dengan muda
 
 1. **Clone repository**
    ```bash
-   git clone https://github.com/yourusername/bot-keuangan.git
+   git clone https://github.com/KraCoder/bot-keuangan.git
    cd bot-keuangan
    ```
 
@@ -321,52 +321,7 @@ heroku create bot-keuangan
 heroku config:set SUPABASE_URL="..." BOT_TOKEN="..."
 git push heroku main
 ```
-
 ---
-
-## 🔄 Fitur yang Akan Datang
-
-- [ ] Edit/delete transaksi
-- [ ] Export laporan (CSV, PDF)
-- [ ] Budget setting per kategori
-- [ ] Notifikasi reminder
-- [ ] Multi-bahasa support
-- [ ] Voice message support
-- [ ] Integrasi expense split
-
----
-
-## 🐛 Troubleshooting
-
-### Bot tidak merespons
-- Cek bot token valid
-- Pastikan bot sudah started (`/start`)
-- Cek internet connection
-
-### Error "Kamu belum terdaftar"
-- Telegram ID Anda belum terdaftar di `telegram_users`
-- Hubungi admin dengan Telegram ID Anda
-
-### Saldo tidak update
-- Refresh saldo dengan `/saldo`
-- Cek Supabase connection
-- Cek API key dan permissions
-
-### Web server error
-- Pastikan PORT tidak digunakan
-- Default PORT: 8080
-
----
-
-## 📝 Struktur Kode
-
-```
-bot-keuangan/
-├── bot.py                 # Main bot logic
-├── requirements.txt       # Dependencies
-├── README.md             # Dokumentasi
-└── .env.example          # Environment template
-```
 
 ### Modul Utama
 
@@ -384,14 +339,6 @@ MIT License - silakan gunakan, modifikasi, dan distribusikan sesuai kebutuhan.
 
 ---
 
-## 👤 Author
-
-**Akbar Ridho**
-- GitHub: [@akbarridho](https://github.com/akbarridho)
-- Telegram: [@akbarr](https://t.me/akbarr)
-
----
-
 ## 🤝 Kontribusi
 
 Kontribusi sangat welcome! Cara berkontribusi:
@@ -406,7 +353,7 @@ Kontribusi sangat welcome! Cara berkontribusi:
 
 ## 📮 Support
 
-Jika ada pertanyaan atau bug, silakan buat [Issue](https://github.com/yourusername/bot-keuangan/issues) atau hubungi author.
+Jika ada pertanyaan atau bug, silakan buat [Issue](https://github.com/KraCoder/bot-keuangan/issues) atau hubungi author.
 
 ---
 
