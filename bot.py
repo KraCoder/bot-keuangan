@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-MoneyManager Bot Telegram - mode webhook + health check
-Tetap responsif di Render free tier dengan bantuan UptimeRobot.
+MoneyManager Bot Telegram - webhook + health check manual
+Server aiohttp menangani webhook dan health check di port yang sama.
 """
 
 import os
-import json
-import re
+import sys
 import logging
-from datetime import date, datetime
+from datetime import date
 
 import httpx
 from telegram import Update
@@ -18,7 +17,6 @@ from telegram.ext import (
     MessageHandler,
     filters,
     ContextTypes,
-    WebhookApp,
 )
 from aiohttp import web
 
@@ -27,10 +25,12 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "supersecret")
-RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")  # https://bot-keuangan.onrender.com
+RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 PORT = int(os.environ.get("PORT", 10000))
 
-# Headers untuk Supabase REST API
+if not BOT_TOKEN or not SUPABASE_URL or not SUPABASE_ANON_KEY or not RENDER_EXTERNAL_URL:
+    sys.exit("ERROR: Pastikan BOT_TOKEN, SUPABASE_URL, SUPABASE_ANON_KEY, RENDER_EXTERNAL_URL diset!")
+
 HEADERS = {
     "apikey": SUPABASE_ANON_KEY,
     "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
@@ -38,40 +38,35 @@ HEADERS = {
     "Prefer": "return=minimal",
 }
 
-# --------------------------- LOGGING ---------------------------
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --------------------------- SUPABASE CLIENT (httpx) ---------------------------
-async def supabase_get(endpoint, params=None):
-    """GET request ke Supabase REST API."""
+# --------------------------- SUPABASE ASYNC FUNCTIONS ---------------------------
+async def supabase_get(endpoint: str, params: dict = None):
     url = f"{SUPABASE_URL}/rest/v1/{endpoint}"
     async with httpx.AsyncClient() as client:
         resp = await client.get(url, headers=HEADERS, params=params)
         resp.raise_for_status()
         return resp.json()
 
-async def supabase_post(endpoint, data):
-    """POST request ke Supabase REST API."""
+async def supabase_post(endpoint: str, data: dict):
     url = f"{SUPABASE_URL}/rest/v1/{endpoint}"
     async with httpx.AsyncClient() as client:
         resp = await client.post(url, headers=HEADERS, json=data)
         resp.raise_for_status()
         return resp.json() if resp.text else None
 
-async def supabase_patch(endpoint, data, params=None):
-    """PATCH request."""
+async def supabase_patch(endpoint: str, data: dict, params: dict = None):
     url = f"{SUPABASE_URL}/rest/v1/{endpoint}"
     async with httpx.AsyncClient() as client:
         resp = await client.patch(url, headers=HEADERS, json=data, params=params)
         resp.raise_for_status()
         return resp.json() if resp.text else None
 
-# --------------------------- AKSES ---------------------------
+# --------------------------- AKSES & PARSING ---------------------------
 async def cek_akses(update: Update) -> str | None:
-    """Cek apakah pengirim terdaftar, return user_id ('suami'/'istri') atau None."""
     telegram_id = update.effective_user.id
     try:
         data = await supabase_get("telegram_users", {"telegram_id": f"eq.{telegram_id}"})
@@ -82,48 +77,33 @@ async def cek_akses(update: Update) -> str | None:
         return data[0]["user_id"]
     return None
 
-# --------------------------- HELPER PARSING ---------------------------
 async def parse_input_transaksi(user_id: str, text: str):
-    """
-    Parse input pengguna.
-    Format: <jenis> <jumlah> <keterangan> [dompet]
-    Contoh: 'keluar 50000 bensin transport gopay'
-    Return: dict dengan jenis, jumlah, keterangan, kategori, dompet_id.
-    """
     parts = text.strip().split()
     if len(parts) < 2:
         return None
-
     jenis = parts[0].lower()
     if jenis not in ("masuk", "keluar"):
         return None
-
     try:
         jumlah = int(parts[1])
     except ValueError:
         return None
 
-    # Ambil keterangan (kata setelah jumlah, sebelum kemungkinan nama dompet)
     sisanya = parts[2:]
     if not sisanya:
         return None
 
-    # Cek apakah kata terakhir adalah nama dompet milik user
     dompet_nama = sisanya[-1].lower()
-    # Ambil daftar dompet user
     dompets = await supabase_get("dompets", {"user_id": f"eq.{user_id}"})
     dompet_map = {d["nama"].lower(): d["id"] for d in dompets}
     if dompet_nama in dompet_map:
         dompet_id = dompet_map[dompet_nama]
         keterangan = " ".join(sisanya[:-1])
     else:
-        # Pakai dompet pertama (default)
         dompet_id = dompets[0]["id"] if dompets else None
         keterangan = " ".join(sisanya)
 
-    # Kategori: default 'lainnya', bisa ditingkatkan nanti dengan deteksi kata kunci
     kategori = "lainnya"
-
     return {
         "jenis": jenis,
         "jumlah": jumlah,
@@ -132,10 +112,8 @@ async def parse_input_transaksi(user_id: str, text: str):
         "dompet_id": dompet_id,
     }
 
-# --------------------------- FUNGSI SIMPAN TRANSAKSI ---------------------------
 async def simpan_transaksi(user_id: str, tgl: str, ket: str, jml: int,
                            jenis: str, kat: str, dompet_id: int):
-    """Simpan transaksi dan update saldo dompet."""
     data = {
         "tanggal": tgl,
         "keterangan": ket,
@@ -148,28 +126,16 @@ async def simpan_transaksi(user_id: str, tgl: str, ket: str, jml: int,
         "diverifikasi": False,
     }
     await supabase_post("transaksi", data)
+
     # Update saldo dompet
     delta = jml if jenis == "masuk" else -jml
-    await supabase_patch(
-        "dompets",
-        {"saldo": None},  # akan kita set dengan query SQL mentah? Bisa pakai RPC.
-        # Di sini kita pakai PATCH via REST dengan header Prefer return=representation,
-        # dan kita butuh update saldo eksisting. Kita bisa hitung dulu saldo sekarang.
-        # Alternatif: gunakan function update_saldo_dompet. Untuk mempersingkat,
-        # kita akan update dengan menambah/delta secara manual setelah GET saldo.
-    )
-    # Dapatkan saldo saat ini
     dompet_data = await supabase_get("dompets", {"id": f"eq.{dompet_id}"})
     if dompet_data:
-        current_saldo = float(dompet_data[0]["saldo"])
-        new_saldo = current_saldo + delta
-        await supabase_patch(
-            "dompets",
-            {"saldo": new_saldo},
-            {"id": f"eq.{dompet_id}"}
-        )
+        current = float(dompet_data[0]["saldo"])
+        new_saldo = current + delta
+        await supabase_patch("dompets", {"saldo": new_saldo}, {"id": f"eq.{dompet_id}"})
 
-# --------------------------- COMMAND HANDLERS ---------------------------
+# --------------------------- TELEGRAM HANDLERS ---------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = await cek_akses(update)
     if not user_id:
@@ -196,29 +162,23 @@ async def bulan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_id:
         await update.message.reply_text("Akses ditolak.")
         return
-    # Bulan ini
     now = date.today()
     tgl_awal = now.replace(day=1).isoformat()
     tgl_akhir = now.isoformat()
     try:
-        masuk = await supabase_get(
-            "transaksi",
-            {
-                "user_id": f"eq.{user_id}",
-                "jenis": "eq.masuk",
-                "tanggal": f"gte.{tgl_awal}",
-                "tanggal": f"lte.{tgl_akhir}",
-            },
-        )
-        keluar = await supabase_get(
-            "transaksi",
-            {
-                "user_id": f"eq.{user_id}",
-                "jenis": "eq.keluar",
-                "tanggal": f"gte.{tgl_awal}",
-                "tanggal": f"lte.{tgl_akhir}",
-            },
-        )
+        # Ambil data masuk dan keluar
+        masuk = await supabase_get("transaksi", {
+            "user_id": f"eq.{user_id}",
+            "jenis": "eq.masuk",
+            "tanggal": f"gte.{tgl_awal}",
+            "tanggal": f"lte.{tgl_akhir}"
+        })
+        keluar = await supabase_get("transaksi", {
+            "user_id": f"eq.{user_id}",
+            "jenis": "eq.keluar",
+            "tanggal": f"gte.{tgl_awal}",
+            "tanggal": f"lte.{tgl_akhir}"
+        })
         tot_masuk = sum(float(t["jumlah"]) for t in masuk)
         tot_keluar = sum(float(t["jumlah"]) for t in keluar)
         teks = (
@@ -229,7 +189,7 @@ async def bulan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(teks)
     except Exception as e:
-        await update.message.reply_text(f"Gagal mengambil data: {e}")
+        await update.message.reply_text(f"Gagal: {e}")
 
 async def bantuan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -237,25 +197,22 @@ async def bantuan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<jenis> <jumlah> <keterangan> [dompet]\n"
         "Contoh: keluar 50000 bensin transport gopay\n"
         "Jenis: masuk / keluar\n"
-        "Dompet (opsional): nama dompet (tunai/bank/ewallet), jika tidak disebutkan pakai dompet pertama."
+        "Dompet opsional, jika tidak disebutkan pakai dompet pertama."
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = await cek_akses(update)
     if not user_id:
-        await update.message.reply_text("Anda tidak terdaftar. Hubungi admin.")
+        await update.message.reply_text("Anda tidak terdaftar.")
         return
-
     text = update.message.text.strip()
     parsed = await parse_input_transaksi(user_id, text)
     if not parsed:
         await update.message.reply_text("Format salah. Gunakan: keluar 50000 bensin transport gopay")
         return
-
     if parsed["dompet_id"] is None:
         await update.message.reply_text("Anda belum memiliki dompet. Tambahkan di dashboard.")
         return
-
     try:
         today = date.today().isoformat()
         await simpan_transaksi(
@@ -274,41 +231,74 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Gagal simpan: {e}")
         await update.message.reply_text("Gagal menyimpan transaksi. Silakan coba lagi.")
 
-# --------------------------- HEALTH CHECK (untuk UptimeRobot) ---------------------------
-class HealthCheckWebhookApp(WebhookApp):
-    """Override WebhookApp agar bisa melayani GET /health"""
-    async def _handle_request(self, request):
-        if request.method == "GET" and request.path == "/health":
-            return web.Response(text="Bot is alive")
-        # Untuk POST /webhook, biarkan parent yang menangani
-        return await super()._handle_request(request)
+# --------------------------- WEBHOOK HANDLER ---------------------------
+async def webhook_handler(request: web.Request) -> web.Response:
+    """Menerima update dari Telegram dan meneruskannya ke Application."""
+    if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
+        return web.Response(status=403, text="Unauthorized")
+    try:
+        data = await request.json()
+    except:
+        return web.Response(status=400, text="Bad Request")
+    # Proses update melalui application
+    await app.process_update(Update.de_json(data, app.bot))
+    return web.Response(text="OK")
+
+async def health_handler(request: web.Request) -> web.Response:
+    return web.Response(text="Bot is alive")
 
 # --------------------------- MAIN ---------------------------
 def main():
-    if not BOT_TOKEN or not SUPABASE_URL or not SUPABASE_ANON_KEY:
-        logger.error("Environment BOT_TOKEN, SUPABASE_URL, SUPABASE_ANON_KEY harus diset!")
-        return
-
+    global app  # global untuk bisa dipakai di webhook_handler
     # Buat Application
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Daftarkan handler
+    # Tambah handler
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("saldo", saldo))
     app.add_handler(CommandHandler("bulan", bulan))
     app.add_handler(CommandHandler("bantuan", bantuan))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Jalankan webhook
-    webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
-    logger.info(f"Menjalankan webhook di {webhook_url}")
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        secret_token=WEBHOOK_SECRET,
-        webhook_url=webhook_url,
-        web_app=HealthCheckWebhookApp,  # custom class untuk health check
-    )
+    # Bangun server webhook manual
+    web_app = web.Application()
+    web_app.router.add_post("/webhook", webhook_handler)
+    web_app.router.add_get("/health", health_handler)
+
+    # Set webhook ke Telegram
+    async def set_webhook():
+        await app.bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/webhook", secret_token=WEBHOOK_SECRET)
+        logger.info("Webhook diset ke Telegram")
+
+    # Jalankan
+    async def startup():
+        await app.initialize()
+        await set_webhook()
+        # Start bot (polling tidak diperlukan, hanya untuk memproses update)
+        # app.start() akan memulai background task jika ada, tidak perlu untuk webhook
+        return web_app
+
+    # Karena aiohttp.run_app perlu coroutine, kita buat runner
+    from aiohttp import web
+    import asyncio
+
+    # Buat aplikasi aiohttp
+    web_app.on_startup.append(lambda _: None)  # kita akan jalankan manual
+
+    # Kita akan menjalankan startup secara manual lalu jalankan web server
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(app.initialize())
+        loop.run_until_complete(app.bot.set_webhook(
+            url=f"{RENDER_EXTERNAL_URL}/webhook", secret_token=WEBHOOK_SECRET))
+        logger.info("Webhook diset")
+        # Jalankan web server
+        web.run_app(web_app, host="0.0.0.0", port=PORT)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        loop.run_until_complete(app.shutdown())
+        loop.close()
 
 if __name__ == "__main__":
     main()
