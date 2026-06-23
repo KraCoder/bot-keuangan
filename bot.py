@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-MoneyManager Bot Telegram - webhook + health check manual
-Server aiohttp menangani webhook dan health check di port yang sama.
+MoneyManager Bot Telegram - webhook + health check
+Menggunakan aiohttp untuk webhook dan health check (anti-sleep).
 """
 
 import os
 import sys
 import logging
 from datetime import date
+import asyncio
 
 import httpx
 from telegram import Update
@@ -18,7 +19,7 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-from aiohttp import web
+from aiohttp import web  # Impor di level modul, aman
 
 # --------------------------- CONFIG ENV ---------------------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -127,7 +128,6 @@ async def simpan_transaksi(user_id: str, tgl: str, ket: str, jml: int,
     }
     await supabase_post("transaksi", data)
 
-    # Update saldo dompet
     delta = jml if jenis == "masuk" else -jml
     dompet_data = await supabase_get("dompets", {"id": f"eq.{dompet_id}"})
     if dompet_data:
@@ -166,7 +166,6 @@ async def bulan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tgl_awal = now.replace(day=1).isoformat()
     tgl_akhir = now.isoformat()
     try:
-        # Ambil data masuk dan keluar
         masuk = await supabase_get("transaksi", {
             "user_id": f"eq.{user_id}",
             "jenis": "eq.masuk",
@@ -233,14 +232,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --------------------------- WEBHOOK HANDLER ---------------------------
 async def webhook_handler(request: web.Request) -> web.Response:
-    """Menerima update dari Telegram dan meneruskannya ke Application."""
     if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
         return web.Response(status=403, text="Unauthorized")
     try:
         data = await request.json()
     except:
         return web.Response(status=400, text="Bad Request")
-    # Proses update melalui application
     await app.process_update(Update.de_json(data, app.bot))
     return web.Response(text="OK")
 
@@ -249,56 +246,41 @@ async def health_handler(request: web.Request) -> web.Response:
 
 # --------------------------- MAIN ---------------------------
 def main():
-    global app  # global untuk bisa dipakai di webhook_handler
-    # Buat Application
+    global app
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Tambah handler
+    # Daftarkan handler
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("saldo", saldo))
     app.add_handler(CommandHandler("bulan", bulan))
     app.add_handler(CommandHandler("bantuan", bantuan))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Bangun server webhook manual
+    # Buat server aiohttp
     web_app = web.Application()
     web_app.router.add_post("/webhook", webhook_handler)
     web_app.router.add_get("/health", health_handler)
 
-    # Set webhook ke Telegram
-    async def set_webhook():
-        await app.bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/webhook", secret_token=WEBHOOK_SECRET)
-        logger.info("Webhook diset ke Telegram")
-
-    # Jalankan
-    async def startup():
+    async def main_async():
         await app.initialize()
-        await set_webhook()
-        # Start bot (polling tidak diperlukan, hanya untuk memproses update)
-        # app.start() akan memulai background task jika ada, tidak perlu untuk webhook
-        return web_app
+        await app.bot.set_webhook(
+            url=f"{RENDER_EXTERNAL_URL}/webhook",
+            secret_token=WEBHOOK_SECRET
+        )
+        logger.info("Webhook diset ke Telegram")
+        runner = web.AppRunner(web_app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", PORT)
+        await site.start()
+        logger.info(f"Server berjalan di port {PORT}")
+        # Tetap hidup selamanya
+        while True:
+            await asyncio.sleep(3600)
 
-    # Karena aiohttp.run_app perlu coroutine, kita buat runner
-    from aiohttp import web
-    import asyncio
-
-    # Buat aplikasi aiohttp
-    web_app.on_startup.append(lambda _: None)  # kita akan jalankan manual
-
-    # Kita akan menjalankan startup secara manual lalu jalankan web server
-    loop = asyncio.get_event_loop()
     try:
-        loop.run_until_complete(app.initialize())
-        loop.run_until_complete(app.bot.set_webhook(
-            url=f"{RENDER_EXTERNAL_URL}/webhook", secret_token=WEBHOOK_SECRET))
-        logger.info("Webhook diset")
-        # Jalankan web server
-        web.run_app(web_app, host="0.0.0.0", port=PORT)
+        asyncio.run(main_async())
     except KeyboardInterrupt:
         pass
-    finally:
-        loop.run_until_complete(app.shutdown())
-        loop.close()
 
 if __name__ == "__main__":
     main()
