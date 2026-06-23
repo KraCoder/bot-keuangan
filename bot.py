@@ -19,7 +19,7 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-import aiohttp  # Jangan gunakan 'from aiohttp import web'
+from aiohttp import web  # Impor langsung di level modul, TIDAK di dalam fungsi
 
 # --------------------------- CONFIG ENV ---------------------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -231,18 +231,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Gagal menyimpan transaksi. Silakan coba lagi.")
 
 # --------------------------- WEBHOOK HANDLER ---------------------------
-async def webhook_handler(request: aiohttp.web.Request) -> aiohttp.web.Response:
+async def webhook_handler(request):
+    """Menerima update Telegram."""
     if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
-        return aiohttp.web.Response(status=403, text="Unauthorized")
+        return web.Response(status=403, text="Unauthorized")
     try:
         data = await request.json()
     except:
-        return aiohttp.web.Response(status=400, text="Bad Request")
+        return web.Response(status=400, text="Bad Request")
+    # Proses update
     await app.process_update(Update.de_json(data, app.bot))
-    return aiohttp.web.Response(text="OK")
+    return web.Response(text="OK")
 
-async def health_handler(request: aiohttp.web.Request) -> aiohttp.web.Response:
-    return aiohttp.web.Response(text="Bot is alive")
+async def health_handler(request):
+    """Endpoint untuk UptimeRobot."""
+    return web.Response(text="Bot is alive")
 
 # --------------------------- MAIN ---------------------------
 def main():
@@ -257,7 +260,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Buat server aiohttp
-    web_app = aiohttp.web.Application()
+    web_app = web.Application()
     web_app.router.add_post("/webhook", webhook_handler)
     web_app.router.add_get("/health", health_handler)
 
@@ -268,12 +271,12 @@ def main():
             secret_token=WEBHOOK_SECRET
         )
         logger.info("Webhook diset ke Telegram")
-        runner = aiohttp.web.AppRunner(web_app)
+        runner = web.AppRunner(web_app)
         await runner.setup()
-        site = aiohttp.web.TCPSite(runner, "0.0.0.0", PORT)
+        site = web.TCPSite(runner, "0.0.0.0", PORT)
         await site.start()
         logger.info(f"Server berjalan di port {PORT}")
-        # Tetap hidup selamanya
+        # Jaga agar tetap hidup
         while True:
             await asyncio.sleep(3600)
 
